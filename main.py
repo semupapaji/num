@@ -13,6 +13,10 @@ import time
 import sqlite3
 import re
 import threading
+import nest_asyncio
+
+# Apply nest_asyncio to allow nested event loops
+nest_asyncio.apply()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,8 +25,8 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # Configuration
-API_ID = int(os.environ.get('API_ID', '33032511'))  # Replace with your API ID
-API_HASH = os.environ.get('API_HASH', '58d0bd6b23f6da7bde206f79866dbc4b')  # Replace with your API Hash
+API_ID = int(os.environ.get('API_ID', '33032511'))
+API_HASH = os.environ.get('API_HASH', '58d0bd6b23f6da7bde206f79866dbc4b')
 BOT_USERNAME = '@THE_UNKNOWN_OSINT_BOT'
 DEFAULT_COUNTRY_CODE = '91'
 
@@ -45,7 +49,6 @@ def init_db():
 init_db()
 
 # Temporary storage
-pending_requests = defaultdict(dict)
 pending_otp_cache = {}
 
 # Timeouts
@@ -394,6 +397,18 @@ async def verify_otp_and_save_session(phone, otp_code):
         logger.error(f"OTP verification error for {phone}: {e}")
         return {"status": "error", "message": str(e)}
 
+def run_async_task(coro):
+    """Run async task in a new event loop"""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(coro)
+        loop.close()
+        return result
+    except Exception as e:
+        logger.error(f"Error in async task: {e}")
+        raise
+
 @app.route('/num', methods=['GET'])
 def get_number_info():
     """Main endpoint to get number information"""
@@ -423,20 +438,18 @@ def get_number_info():
                 "message": "No active session. Please login first with /login?num=7724809103"
             }), 403
         
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        client, is_valid = loop.run_until_complete(get_user_client(phone_number))
+        # Run async task
+        result = run_async_task(get_user_client(phone_number))
+        client, is_valid = result
         
         if not is_valid or not client:
-            loop.close()
             return jsonify({
                 "status": "error",
                 "message": "Session expired. Please login again with /login?num=7724809103"
             }), 403
         
         command = f"/num {phone_number}"
-        response = loop.run_until_complete(send_command_to_bot(phone_number, client, command))
-        loop.close()
+        response = run_async_task(send_command_to_bot(phone_number, client, command))
         
         if not response:
             return jsonify({
@@ -487,10 +500,8 @@ def login():
         
         session_string = get_session(formatted_phone)
         if session_string:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            client, is_valid = loop.run_until_complete(get_user_client(phone_number))
-            loop.close()
+            result = run_async_task(get_user_client(phone_number))
+            client, is_valid = result
             
             if is_valid:
                 return jsonify({
@@ -500,11 +511,7 @@ def login():
                     "phone": formatted_phone
                 })
         
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(handle_login_request(phone_number))
-        loop.close()
-        
+        result = run_async_task(handle_login_request(phone_number))
         return jsonify(result)
         
     except Exception as e:
@@ -549,11 +556,7 @@ def verify_otp_endpoint():
                 "message": "Please input valid OTP (4-6 digits)"
             }), 400
         
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(verify_otp_and_save_session(phone_number, otp_code))
-        loop.close()
-        
+        result = run_async_task(verify_otp_and_save_session(phone_number, otp_code))
         return jsonify(result)
         
     except Exception as e:
@@ -643,10 +646,8 @@ def check_session():
                 "session_active": False
             })
         
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        client, is_valid = loop.run_until_complete(get_user_client(phone_number))
-        loop.close()
+        result = run_async_task(get_user_client(phone_number))
+        client, is_valid = result
         
         if is_valid:
             return jsonify({
@@ -718,8 +719,6 @@ if __name__ == '__main__':
     # Initialize bot
     asyncio.run(initialize_bot())
     
-    # Run Flask app on localhost
+    # Run Flask app
     port = int(os.environ.get('PORT', 8080))
-    
-    # Bind to all interfaces so it's accessible
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=False)
