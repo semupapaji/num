@@ -1,5 +1,3 @@
 Flask
 telethon
-aiohttp
-asyncio
-nest_asyncio
+requests
